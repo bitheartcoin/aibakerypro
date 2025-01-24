@@ -1,71 +1,34 @@
 <?php
-require_once 'config.php';
+require_once '../config.php';
 session_start();
 
 if (!isset($_SESSION['user_id'])) {
-    header('Location: login.php');
+    header('Location: ../login.php');
     exit;
 }
 
-// Felhasználói adatok lekérése
-$stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+// Admin jogosultság ellenőrzése
+$stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
 $stmt->execute([$_SESSION['user_id']]);
-$user = $stmt->fetch(PDO::FETCH_ASSOC);
+$user = $stmt->fetch();
 
-// Aktív munkaidő ellenőrzése
-$stmt = $pdo->prepare("SELECT * FROM work_hours WHERE user_id = ? AND check_out IS NULL ORDER BY check_in DESC LIMIT 1");
-$stmt->execute([$_SESSION['user_id']]);
-$active_work = $stmt->fetch();
-
-// Ha van aktív munkaidő, számoljuk az eltelt időt
-$elapsed_time = '';
-if ($active_work) {
-    $start_time = new DateTime($active_work['check_in']);
-    $current_time = new DateTime();
-    $interval = $current_time->diff($start_time);
-    $elapsed_time = $interval->format('%H:%I:%S');
+if ($user['role'] !== 'admin') {
+    header('Location: ../index.php');
+    exit;
 }
-
-// Fizetéselőleg ellenőrzése
-$stmt = $pdo->prepare("
-    SELECT SUM(amount) as total_advance 
-    FROM transactions 
-    WHERE category = 'fizeteseloleg' 
-    AND type = 'expense'
-    AND description LIKE ?
-");
-$stmt->execute(['%' . $user['username'] . '%']);
-$advance = $stmt->fetch();
-$has_advance = ($advance['total_advance'] ?? 0) > 0;
-
-// Saját üzletek lekérése
-$stmt = $pdo->query("SELECT * FROM shops ORDER BY name");
-$shops = $stmt->fetchAll();
 ?>
 <!DOCTYPE html>
 <html lang="hu">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Bakery Professional Management System</title>
+    <title>Admin Felület - AI Bakery Professional Management System</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
         :root {
             --primary-color: #2c3e50;
             --secondary-color: #34495e;
-            --accent-color: #e67e22;
-            --success-color: #27ae60;
-            --danger-color: #e74c3c;
-            --warning-color: #f1c40f;
-            --light-color: #ecf0f1;
-            --pos-color: #8e44ad;
-            --doc-color: #16a085;
-            --factory-color: #2980b9;
-            --baker-color: #c0392b;
-            --shop-color: #d35400;
-            --schedule-color: #16a085;
-            --profile-color: #3498db;
         }
 
         body {
@@ -78,11 +41,12 @@ $shops = $stmt->fetchAll();
         .main-header {
             background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
             padding: 2rem 0;
+            margin-bottom: 2rem;
             color: white;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
         }
 
-        .shop-card {
+        .module-card {
             background: white;
             border-radius: 15px;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
@@ -91,20 +55,19 @@ $shops = $stmt->fetchAll();
             overflow: hidden;
         }
 
-        .shop-card:hover {
+        .module-card:hover {
             transform: translateY(-5px);
             box-shadow: 0 15px 35px rgba(0, 0, 0, 0.2);
         }
 
-        .shop-header {
-            background: linear-gradient(135deg, var(--shop-color), #d35400);
-            color: white;
+        .module-header {
             padding: 1.5rem;
             position: relative;
             overflow: hidden;
+            color: white;
         }
 
-        .shop-header i {
+        .module-header i {
             position: absolute;
             right: -10px;
             top: -10px;
@@ -113,312 +76,394 @@ $shops = $stmt->fetchAll();
             transform: rotate(15deg);
         }
 
-        .shop-title {
-            font-size: 1.5rem;
-            font-weight: 500;
-            margin: 0;
-            position: relative;
-            z-index: 1;
+        .module-body {
+            padding: 1.5rem;
         }
 
-        .btn-action {
-            padding: 0.75rem 1.5rem;
+        .btn-module {
+            width: 100%;
+            text-align: left;
+            padding: 0.75rem 1rem;
             border-radius: 8px;
-            font-weight: 500;
             transition: all 0.3s ease;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            font-size: 0.9rem;
+            border: none;
+            color: white;
         }
 
-        .btn-action:hover {
+        .btn-module:hover {
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
         }
 
-        .factory-card .shop-header {
-            background: linear-gradient(135deg, var(--factory-color), #2573a7);
+        .btn-module i {
+            margin-right: 0.5rem;
+            width: 20px;
+            text-align: center;
         }
 
-        .pos-card .shop-header {
-            background: linear-gradient(135deg, var(--pos-color), #6c3483);
-        }
+        /* Színek a moduloknak */
+        .transactions { background: linear-gradient(135deg, #2980b9, #3498db); }
+        .users { background: linear-gradient(135deg, #27ae60, #2ecc71); }
+        .products { background: linear-gradient(135deg, #e67e22, #f39c12); }
+        .production { background: linear-gradient(135deg, #8e44ad, #9b59b6); }
+        .drivers { background: linear-gradient(135deg, #00b4db, #0083b0); }
+        .payments { background: linear-gradient(135deg, #9b59b6, #8e44ad); }
+        .schedules { background: linear-gradient(135deg, #e74c3c, #c0392b); }
+        .orders { background: linear-gradient(135deg, #f1c40f, #f39c12); }
+        .partners { background: linear-gradient(135deg, #1abc9c, #16a085); }
+        .ai-forecast { background: linear-gradient(135deg, #fd79a8, #e84393); }
+        .ai-vivien { background: linear-gradient(135deg, #DA4453, #89216B); }
+        .statistics { background: linear-gradient(135deg, #636e72, #2d3436); }
+        .documents { background: linear-gradient(135deg, #795548, #5d4037); }
+        .rfid { background: linear-gradient(135deg, #20bf6b, #0b8793); }
+        .cameras { background: linear-gradient(135deg, #192a56, #273c75); }
+        .gps { background: linear-gradient(135deg, #1A2980, #26D0CE); }
+        .settings { background: linear-gradient(135deg, #757F9A, #D7DDE8); }
 
-        .baker-card .shop-header {
-            background: linear-gradient(135deg, var(--baker-color), #962e22);
-        }
-
-        .profile-card .shop-header {
-            background: linear-gradient(135deg, var(--profile-color), #2980b9);
-        }
-
-        .schedule-card .shop-header {
-            background: linear-gradient(135deg, var(--schedule-color), #0e8c73);
-        }
-
-        .doc-card .shop-header {
-            background: linear-gradient(135deg, var(--doc-color), #0e8c73);
+        .section-title {
+            font-size: 1.2rem;
+            color: #2c3e50;
+            margin: 2rem 0 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid rgba(44, 62, 80, 0.1);
         }
     </style>
 </head>
 <body>
-    <header class="main-header mb-4">
+    <header class="main-header">
         <div class="container">
             <div class="d-flex justify-content-between align-items-center">
                 <div>
-                    <h1 class="h3 mb-0">AI Bakery Professional Management System</h1>
-                    <p class="mb-0 opacity-75">Üdvözöljük, <?php echo htmlspecialchars($user['username']); ?>!</p>
+                    <h1 class="h3 mb-0">Admin Felület</h1>
+                    <p class="mb-0 opacity-75">AI Bakery Professional Management System</p>
                 </div>
-                <div class="d-flex align-items-center gap-3">
-                    <?php if ($active_work): ?>
-                    <div class="d-flex align-items-center text-warning">
-                        <i class="fas fa-clock me-2"></i>
-                        <span id="elapsed_time"><?php echo $elapsed_time; ?></span>
-                    </div>
-                    <form method="POST" action="check_in_out.php" class="mb-0">
-                        <button type="submit" name="check_out" class="btn btn-danger btn-action">
-                            <i class="fas fa-sign-out-alt me-2"></i>Kilépés
-                        </button>
-                    </form>
-                    <?php else: ?>
-                    <form method="POST" action="check_in_out.php" class="mb-0">
-                        <button type="submit" name="check_in" class="btn btn-success btn-action">
-                            <i class="fas fa-sign-in-alt me-2"></i>Belépés
-                        </button>
-                    </form>
-                    <?php endif; ?>
-                    <?php if ($user['role'] == 'admin'): ?>
-                    <a href="admin/" class="btn btn-warning btn-action">
-                        <i class="fas fa-cogs me-2"></i>Admin Panel
+                <div class="d-flex gap-3 align-items-center">
+                    <a href="../index.php" class="btn btn-light">
+                        <i class="fas fa-home me-2"></i>Főoldal
                     </a>
-                    <?php endif; ?>
-                    <a href="logout.php" class="btn btn-danger btn-action">
-                        <i class="fas fa-power-off me-2"></i>Kijelentkezés
+                    <a href="../logout.php" class="btn btn-danger">
+                        <i class="fas fa-sign-out-alt me-2"></i>Kijelentkezés
                     </a>
                 </div>
             </div>
         </div>
     </header>
 
-    <div class="container flex-grow-1">
-        <?php if (isset($_SESSION['success'])): ?>
-            <div class="alert alert-success alert-dismissible fade show animate-fade-in" role="alert">
-                <i class="fas fa-check-circle me-2"></i>
-                <?php 
-                echo $_SESSION['success'];
-                unset($_SESSION['success']);
-                ?>
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            </div>
-        <?php endif; ?>
-
-        <?php if ($active_work): ?>
-            <div class="alert alert-success alert-dismissible fade show mb-4">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <i class="fas fa-business-time me-2"></i>
-                        <strong>Aktív munkaidő</strong>
-                    </div>
-                    <div>
-                        Kezdés: <?php echo date('H:i', strtotime($active_work['check_in'])); ?>
-                    </div>
-                </div>
-            </div>
-        <?php endif; ?>
-
-        <div class="row g-4">
-            <?php if ($user['role'] == 'admin' || $user['user_type'] == 'driver'): ?>
-            <!-- Üzem kártya -->
+    <div class="container">
+        <!-- 1. Alap műveletek -->
+        <h2 class="section-title"><i class="fas fa-th me-2"></i>Alap műveletek</h2>
+        <div class="row g-4 mb-4">
+            <!-- Tranzakciók -->
             <div class="col-lg-4">
-                <div class="shop-card factory-card">
-                    <div class="shop-header">
-                        <i class="fas fa-industry"></i>
-                        <h3 class="shop-title">Üzem</h3>
-                        <p class="mb-0">Kiszállítás kezelése</p>
-                    </div>
-                    <div class="shop-body p-4">
-                        <a href="factory.php" class="btn btn-light btn-action w-100">
-                            <i class="fas fa-boxes me-2"></i>
-                            Kezelés
-                        </a>
-                    </div>
-                </div>
-            </div>
-            <?php endif; ?>
-
-            <?php if ($user['role'] == 'admin' || $user['user_type'] == 'seller'): ?>
-            <!-- POS Rendszer kártya -->
-            <div class="col-lg-4">
-                <div class="shop-card pos-card">
-                    <div class="shop-header">
+                <div class="module-card">
+                    <div class="module-header transactions">
                         <i class="fas fa-cash-register"></i>
-                        <h3 class="shop-title">POS Rendszer</h3>
-                        <p class="mb-0">Vonalkódolvasós kasszarendszer</p>
+                        <h3 class="h5 mb-1">Tranzakciók</h3>
+                        <p class="mb-0 small">Bevételek és kiadások kezelése</p>
                     </div>
-                    <div class="shop-body p-4 bg-white">
-                        <form id="posForm" method="GET" action="pos.php">
-                            <div class="mb-3">
-                                <label class="form-label">Válasszon üzletet</label>
-                                <select name="shop_id" class="form-select mb-3" required>
-                                    <option value="">Válasszon üzletet...</option>
-                                    <?php foreach ($shops as $shop): ?>
-                                    <option value="<?php echo $shop['id']; ?>">
-                                        <?php echo htmlspecialchars($shop['name']); ?>
-                                    </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                            <button type="submit" class="btn btn-success w-100">
-                                <i class="fas fa-shopping-cart me-2"></i>
-                                Kassza megnyitása
-                            </button>
-                        </form>
-                    </div>
-                </div>
-            </div>
-            <?php endif; ?>
-
-            <?php if ($user['user_type'] == 'baker'): ?>
-            <!-- Gyártás kártya -->
-            <div class="col-lg-4">
-                <div class="shop-card baker-card">
-                    <div class="shop-header">
-                        <i class="fas fa-bread-slice"></i>
-                        <h3 class="shop-title">Gyártás</h3>
-                        <p class="mb-0">Termelés kezelése</p>
-                    </div>
-                    <div class="shop-body p-4">
-                        <a href="production.php" class="btn btn-light btn-action w-100">
-                            <i class="fas fa-industry me-2"></i>
-                            Gyártás kezelése
-                        </a>
-                    </div>
-                </div>
-            </div>
-            <?php endif; ?>
-
-            <!-- Saját adatok kártya -->
-            <div class="col-lg-4">
-                <div class="shop-card profile-card">
-                    <div class="shop-header">
-                        <i class="fas fa-user"></i>
-                        <h3 class="shop-title">Saját adatok</h3>
-                        <p class="mb-0">Profil kezelése</p>
-                    </div>
-                    <div class="shop-body p-4">
-                        <a href="profile.php" class="btn btn-light btn-action w-100">
-                            <i class="fas fa-id-card me-2"></i>
-                            Adatok kezelése
+                    <div class="module-body">
+                        <a href="transactions.php" class="btn btn-module transactions">
+                            <i class="fas fa-arrow-right"></i>Kezelés
                         </a>
                     </div>
                 </div>
             </div>
 
-            <!-- Beosztás és fizetések kártya -->
+            <!-- Felhasználók -->
             <div class="col-lg-4">
-                <div class="shop-card schedule-card">
-                    <div class="shop-header">
-                        <i class="fas fa-calendar-alt"></i>
-                        <h3 class="shop-title">Beosztás és fizetések</h3>
-                        <p class="mb-0">Munkaidő és bérek</p>
+                <div class="module-card">
+                    <div class="module-header users">
+                        <i class="fas fa-users"></i>
+                        <h3 class="h5 mb-1">Felhasználók</h3>
+                        <p class="mb-0 small">Alkalmazottak és jogosultságok</p>
                     </div>
-                    <div class="shop-body p-4">
-                        <a href="schedule.php" class="btn btn-light btn-action w-100">
-                            <i class="fas fa-clock me-2"></i>
-                            Megtekintés
+                    <div class="module-body">
+                        <a href="users.php" class="btn btn-module users">
+                            <i class="fas fa-arrow-right"></i>Kezelés
                         </a>
                     </div>
                 </div>
             </div>
 
-            <!-- Dokumentum feltöltés kártya -->
+            <!-- Termékek -->
             <div class="col-lg-4">
-                <div class="shop-card doc-card">
-                    <div class="shop-header">
-                        <i class="fas fa-file-upload"></i>
-                        <h3 class="shop-title">Dokumentumok</h3>
-                        <p class="mb-0">Dokumentumok kezelése</p>
+                <div class="module-card">
+                    <div class="module-header products">
+                        <i class="fas fa-box"></i>
+                        <h3 class="h5 mb-1">Termékek</h3>
+                        <p class="mb-0 small">Termékek és árak kezelése</p>
                     </div>
-                    <div class="shop-body p-4">
-                    <form action="upload_document.php" method="POST" enctype="multipart/form-data">
-                            <div class="mb-3">
-                                <select name="document_type" class="form-select mb-3" required>
-                                    <option value="">Dokumentum típusa...</option>
-                                    <option value="szamla">Számla</option>
-                                    <option value="igazolas">Igazolás</option>
-                                    <option value="egyeb">Egyéb</option>
-                                </select>
-                                <input type="file" name="document" class="form-control" required>
-                            </div>
-                            <button type="submit" class="btn btn-success btn-action w-100">
-                                <i class="fas fa-upload me-2"></i>
-                                Feltöltés
-                            </button>
-                        </form>
-                    </div>
-                </div>
-            </div>
-
-            <?php if ($user['role'] == 'admin' || $user['user_type'] == 'seller'): ?>
-            <!-- Üzlet kártyák -->
-            <?php foreach ($shops as $shop): ?>
-            <div class="col-lg-4">
-                <div class="shop-card">
-                    <div class="shop-header">
-                        <i class="fas fa-store"></i>
-                        <h3 class="shop-title"><?php echo htmlspecialchars($shop['name']); ?></h3>
-                        <p class="mb-0">Üzlet kezelése</p>
-                    </div>
-                    <div class="shop-body p-4">
-                        <a href="form.php?shop_id=<?php echo $shop['id']; ?>" class="btn btn-primary btn-action w-100">
-                            <i class="fas fa-cash-register me-2"></i>
-                            Kezelés
+                    <div class="module-body">
+                        <a href="products.php" class="btn btn-module products">
+                            <i class="fas fa-arrow-right"></i>Kezelés
                         </a>
                     </div>
                 </div>
             </div>
-            <?php endforeach; ?>
-            <?php endif; ?>
         </div>
+
+        <!-- 2. Személyzet -->
+        <h2 class="section-title"><i class="fas fa-user-tie me-2"></i>Személyzet</h2>
+        <div class="row g-4 mb-4">
+            <!-- Sofőrök -->
+            <div class="col-lg-4">
+                <div class="module-card">
+                    <div class="module-header drivers">
+                        <i class="fas fa-truck"></i>
+                        <h3 class="h5 mb-1">Sofőrök</h3>
+                        <p class="mb-0 small">Gépjárművezetők kezelése</p>
+                    </div>
+                    <div class="module-body">
+                        <a href="drivers.php" class="btn btn-module drivers">
+                            <i class="fas fa-arrow-right"></i>Kezelés
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Fizetések -->
+            <div class="col-lg-4">
+                <div class="module-card">
+                    <div class="module-header payments">
+                        <i class="fas fa-money-bill-wave"></i>
+                        <h3 class="h5 mb-1">Fizetések</h3>
+                        <p class="mb-0 small">Bérek és juttatások</p>
+                    </div>
+                    <div class="module-body">
+                        <a href="payments.php" class="btn btn-module payments">
+                            <i class="fas fa-arrow-right"></i>Kezelés
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Munkabeosztás -->
+            <div class="col-lg-4">
+                <div class="module-card">
+                    <div class="module-header schedules">
+                        <i class="fas fa-calendar-alt"></i>
+                        <h3 class="h5 mb-1">Munkabeosztás</h3>
+                        <p class="mb-0 small">Műszakok kezelése</p>
+                    </div>
+                    <div class="module-body">
+                        <a href="schedules.php" class="btn btn-module schedules">
+                            <i class="fas fa-arrow-right"></i>Kezelés
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. Üzleti folyamatok -->
+        <h2 class="section-title"><i class="fas fa-chart-line me-2"></i>Üzleti folyamatok</h2>
+        <div class="row g-4 mb-4">
+            <!-- Rendelések -->
+            <div class="col-lg-4">
+                <div class="module-card">
+                    <div class="module-header orders">
+                        <i class="fas fa-shopping-cart"></i>
+                        <h3 class="h5 mb-1">Rendelések</h3>
+                        <p class="mb-0 small">Rendelések kezelése</p>
+                    </div>
+                    <div class="module-body">
+                        <a href="orders.php" class="btn btn-module orders">
+                            <i class="fas fa-arrow-right"></i>Kezelés
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Gyártás -->
+            <div class="col-lg-4">
+                <div class="module-card">
+                    <div class="module-header production">
+                        <i class="fas fa-bread-slice"></i>
+                        <h3 class="h5 mb-1">Gyártás</h3>
+                        <p class="mb-0 small">Termelés irányítása</p>
+                    </div>
+                    <div class="module-body">
+                        <a href="production.php" class="btn btn-module production">
+                            <i class="fas fa-arrow-right"></i>Kezelés
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Partnerek -->
+            <div class="col-lg-4">
+                <div class="module-card">
+                    <div class="module-header partners">
+                        <i class="fas fa-handshake"></i>
+                        <h3 class="h5 mb-1">Partnerek</h3>
+                        <p class="mb-0 small">Partnerek kezelése</p>
+                    </div>
+                    <div class="module-body">
+                        <a href="partners.php" class="btn btn-module partners">
+                            <i class="fas fa-arrow-right"></i>Kezelés
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 4. AI és Analitika -->
+        <h2 class="section-title"><i class="fas fa-robot me-2"></i>AI és Analitika</h2>
+        <div class="row g-4 mb-4">
+            <!-- AI Előrejelzés -->
+            <div class="col-lg-4">
+                <div class="module-card">
+                    <div class="module-header ai-forecast">
+                        <i class="fas fa-brain"></i>
+                        <h3 class="h5 mb-1">AI Előrejelzés</h3>
+                        <p class="mb-0 small">Mesterséges intelligencia</p>
+                    </div>
+                    <div class="module-body">
+                        <a href="ai_forecast.php" class="btn btn-module ai-forecast">
+                            <i class="fas fa-arrow-right"></i>Kezelés
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- AI Vivien -->
+            <div class="col-lg-4">
+                <div class="module-card">
+                    <div class="module-header ai-vivien">
+                        <i class="fas fa-comments"></i>
+                        <h3 class="h5 mb-1">AI Vivien</h3>
+                        <p class="mb-0 small">AI Asszisztens</p>
+                    </div>
+                    <div class="module-body">
+                    <a href="ai_assistant.php" class="btn btn-module ai-vivien">
+                            <i class="fas fa-arrow-right"></i>Kezelés
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Statisztikák -->
+            <div class="col-lg-4">
+                <div class="module-card">
+                    <div class="module-header statistics">
+                        <i class="fas fa-chart-pie"></i>
+                        <h3 class="h5 mb-1">Statisztikák</h3>
+                        <p class="mb-0 small">Elemzések és riportok</p>
+                    </div>
+                    <div class="module-body">
+                        <a href="statistics.php" class="btn btn-module statistics">
+                            <i class="fas fa-arrow-right"></i>Kezelés
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 5. Dokumentumkezelés -->
+        <h2 class="section-title"><i class="fas fa-file-alt me-2"></i>Dokumentumkezelés</h2>
+        <div class="row g-4 mb-4">
+           <!-- Dokumentumok -->
+           <div class="col-lg-4">
+               <div class="module-card">
+                   <div class="module-header documents">
+                       <i class="fas fa-file-alt"></i>
+                       <h3 class="h5 mb-1">Dokumentumok</h3>
+                       <p class="mb-0 small">Dokumentumok kezelése</p>
+                   </div>
+                   <div class="module-body">
+                       <a href="documents.php" class="btn btn-module documents">
+                           <i class="fas fa-arrow-right"></i>Kezelés
+                       </a>
+                   </div>
+               </div>
+           </div>
+        </div>
+
+        <!-- 6. Biztonság és Ellenőrzés -->
+        <h2 class="section-title"><i class="fas fa-shield-alt me-2"></i>Biztonság és Ellenőrzés</h2>
+        <div class="row g-4 mb-4">
+           <!-- RFID Kezelő -->
+           <div class="col-lg-4">
+               <div class="module-card">
+                   <div class="module-header rfid">
+                       <i class="fas fa-wifi"></i>
+                       <h3 class="h5 mb-1">RFID Kezelő</h3>
+                       <p class="mb-0 small">Beléptetés kezelése</p>
+                   </div>
+                   <div class="module-body">
+                       <a href="rfid_manager.php" class="btn btn-module rfid">
+                           <i class="fas fa-arrow-right"></i>Kezelés
+                       </a>
+                   </div>
+               </div>
+           </div>
+
+           <!-- Kamera rendszer -->
+           <div class="col-lg-4">
+               <div class="module-card">
+                   <div class="module-header cameras">
+                       <i class="fas fa-video"></i>
+                       <h3 class="h5 mb-1">Kamera rendszer</h3>
+                       <p class="mb-0 small">Megfigyelő rendszer</p>
+                   </div>
+                   <div class="module-body">
+                       <a href="cameras.php" class="btn btn-module cameras">
+                           <i class="fas fa-arrow-right"></i>Kezelés
+                       </a>
+                   </div>
+               </div>
+           </div>
+
+           <!-- GPS nyomkövetés -->
+           <div class="col-lg-4">
+               <div class="module-card">
+                   <div class="module-header gps">
+                       <i class="fas fa-map-marker-alt"></i>
+                       <h3 class="h5 mb-1">GPS nyomkövetés</h3>
+                       <p class="mb-0 small">Járművek követése</p>
+                   </div>
+                   <div class="module-body">
+                       <a href="gps.php" class="btn btn-module gps">
+                           <i class="fas fa-arrow-right"></i>Kezelés
+                       </a>
+                   </div>
+               </div>
+           </div>
+        </div>
+
+        <!-- 7. Rendszerbeállítások -->
+        <h2 class="section-title"><i class="fas fa-cogs me-2"></i>Rendszerbeállítások</h2>
+        <div class="row g-4 mb-4">
+           <!-- Beállítások -->
+           <div class="col-12">
+               <div class="module-card">
+                   <div class="module-header settings">
+                       <i class="fas fa-cog"></i>
+                       <h3 class="h5 mb-1">Beállítások</h3>
+                       <p class="mb-0 small">Rendszerbeállítások</p>
+                   </div>
+                   <div class="module-body">
+                       <a href="settings.php" class="btn btn-module settings">
+                           <i class="fas fa-arrow-right"></i>Kezelés
+                       </a>
+                   </div>
+               </div>
+           </div>
+        </div>
+
     </div>
 
-    <script>
-    // Munkaidő számláló
-    <?php if ($active_work): ?>
-    function updateElapsedTime() {
-        const startTime = new Date('<?php echo $active_work['check_in']; ?>').getTime();
-        
-        setInterval(() => {
-            const now = new Date().getTime();
-            const elapsed = now - startTime;
-            
-            const hours = Math.floor(elapsed / (1000 * 60 * 60));
-            const minutes = Math.floor((elapsed % (1000 * 60 * 60)) / (1000 * 60));
-            const seconds = Math.floor((elapsed % (1000 * 60)) / 1000);
-            
-            document.getElementById('elapsed_time').textContent = 
-                String(hours).padStart(2, '0') + ':' +
-                String(minutes).padStart(2, '0') + ':' +
-                String(seconds).padStart(2, '0');
-        }, 1000);
-    }
-    updateElapsedTime();
-    <?php endif; ?>
-
-    // Sikeres üzenet automatikus eltüntetése
-    document.addEventListener('DOMContentLoaded', function() {
-        const alertSuccess = document.querySelector('.alert-success');
-        if (alertSuccess) {
-            setTimeout(function() {
-                const closeButton = alertSuccess.querySelector('.btn-close');
-                if (closeButton) {
-                    closeButton.click();
-                }
-            }, 3000);
-        }
-    });
-    </script>
-
     <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+    <script>
+       // Kártya hover effektek
+       document.querySelectorAll('.module-card').forEach(card => {
+           card.addEventListener('mouseenter', function() {
+               this.querySelector('.btn-module').style.transform = 'translateX(10px)';
+           });
+           
+           card.addEventListener('mouseleave', function() {
+               this.querySelector('.btn-module').style.transform = 'translateX(0)';
+           });
+       });
+    </script>
 </body>
 </html>

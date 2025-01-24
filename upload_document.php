@@ -16,29 +16,43 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         mkdir($upload_dir, 0777, true);
     }
 
+    // A fájl kezelése
     $file = $_FILES['document'];
     $file_extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
     $allowed_extensions = ['jpg', 'jpeg', 'png', 'pdf'];
 
     if (in_array($file_extension, $allowed_extensions)) {
-        // Egyedi fájlnév generálása
+        // Biztonságos, egyedi fájlnév generálása
         $new_filename = uniqid() . '_' . date('Ymd_His') . '.' . $file_extension;
         $upload_path = $upload_dir . $new_filename;
 
         if (move_uploaded_file($file['tmp_name'], $upload_path)) {
-            // Dokumentum mentése az adatbázisba
-            $stmt = $pdo->prepare("
-                INSERT INTO documents (user_id, filename, file_path, document_type) 
-                VALUES (?, ?, ?, ?)
-            ");
-            $stmt->execute([
-                $_SESSION['user_id'],
-                $file['name'],
-                $upload_path,
-                $document_type
-            ]);
+            try {
+                // Dokumentum mentése az adatbázisba
+                $stmt = $pdo->prepare("
+                    INSERT INTO documents (
+                        user_id, 
+                        filename, 
+                        file_path, 
+                        document_type, 
+                        original_filename
+                    ) VALUES (?, ?, ?, ?, ?)
+                ");
+                
+                $stmt->execute([
+                    $_SESSION['user_id'],
+                    $new_filename,
+                    $upload_path,
+                    $document_type,
+                    $file['name']
+                ]);
 
-            $_SESSION['success'] = 'Dokumentum sikeresen feltöltve!';
+                $_SESSION['success'] = 'Dokumentum sikeresen feltöltve!';
+            } catch (Exception $e) {
+                // Ha hiba történt az adatbázis művelet során, töröljük a feltöltött fájlt
+                unlink($upload_path);
+                $_SESSION['error'] = 'Hiba történt a dokumentum mentése közben!';
+            }
         } else {
             $_SESSION['error'] = 'Hiba történt a fájl feltöltése közben!';
         }
@@ -47,5 +61,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     }
 }
 
-header('Location: index.php');
+// Visszairányítás az előző oldalra
+header('Location: ' . $_SERVER['HTTP_REFERER']);
 exit;
